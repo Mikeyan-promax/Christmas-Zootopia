@@ -173,6 +173,8 @@
     <div id="loading">DECORATING TREE...<br><span>Generating Snowflakes</span></div>
     <div id="video-wrapper"><video id="video-preview" playsinline></video></div>
     <div id="canvas-container"></div>
+    <div id="debug-overlay" style="position:fixed;right:10px;top:10px;background:rgba(0,0,0,0.6);color:#FFD700;padding:8px 10px;border:1px solid rgba(255,215,0,0.4);font-family:monospace;z-index:11;display:none"></div>
+    <div id="pinch-crosshair" style="position:fixed;width:14px;height:14px;border:2px solid #FFD700;border-radius:50%;z-index:11;display:none;transform:translate(-50%,-50%)"></div>
 
     <!-- Import Maps -->
     <script type="importmap">
@@ -217,9 +219,15 @@
         let activePhotoIndex = -1;
         let raycaster = new THREE.Raycaster();
         let highlightedIndex = -1;
+        let zoomLock = false;
+        let lastHandNDC = null;
+        let lastHandTime = 0;
         
         const gestureText = document.getElementById('gesture-debug');
         const loadingScreen = document.getElementById('loading');
+        const debugOverlay = document.getElementById('debug-overlay');
+        const pinchCrosshair = document.getElementById('pinch-crosshair');
+        let debugEnabled = false;
 
         function initThree() {
             const container = document.getElementById('canvas-container');
@@ -452,9 +460,9 @@
             mesh.scale.setScalar(scale);
 
             const scatterPos = new THREE.Vector3(
-                (Math.random() - 0.5) * 280,
-                (Math.random() - 0.5) * 200 + 70,
-                (Math.random() - 0.5) * 150
+                (Math.random() - 0.5) * 160,
+                (Math.random() - 0.5) * 110 + 60,
+                (Math.random() - 0.5) * 120
             );
 
             scene.add(mesh);
@@ -482,9 +490,9 @@
             mesh.rotateY(Math.PI); 
 
             const scatterPos = new THREE.Vector3(
-                (Math.random() - 0.5) * 350,
-                (Math.random() - 0.5) * 200 + 70,
-                (Math.random() - 0.5) * 150
+                (Math.random() - 0.5) * 180,
+                (Math.random() - 0.5) * 110 + 60,
+                (Math.random() - 0.5) * 120
             );
 
             scene.add(mesh);
@@ -502,11 +510,13 @@
                 particles.forEach(p => { p.targetPos.copy(p.treePos); if(p.isPhoto) { p.mesh.lookAt(0, p.treePos.y, 0); p.mesh.rotateY(Math.PI); } });
                 activePhotoIndex = -1;
                 clearHighlight();
+                zoomLock = false;
             } else if (newState === 'SCATTER') {
                 gestureText.innerHTML = "STATUS: ✨ <span style='color:gold'>Magic Scatter</span>";
                 particles.forEach(p => p.targetPos.copy(p.scatterPos));
                 activePhotoIndex = -1;
                 clearHighlight();
+                zoomLock = false;
             } else if (newState === 'ZOOM') {
                 gestureText.innerHTML = "STATUS: 🖼️ <span style='color:#ff4d4d'>Memory Focus</span>";
                 const photos = particles.filter(p => p.isPhoto);
@@ -551,6 +561,49 @@
                 if (p.mesh.userData.frame) { scene.remove(p.mesh.userData.frame); p.mesh.userData.frame = null; }
             }
             highlightedIndex = -1;
+        }
+
+        // 调试显示：切换开关与更新信息
+        document.addEventListener('keydown', (e) => {
+            if (e.key && e.key.toLowerCase() === 'd') {
+                debugEnabled = !debugEnabled;
+                debugOverlay.style.display = debugEnabled ? 'block' : 'none';
+                pinchCrosshair.style.display = debugEnabled ? 'block' : 'none';
+            }
+        });
+
+        function updateDebug(text, px, py) {
+            if (!debugEnabled) return;
+            debugOverlay.textContent = text;
+            pinchCrosshair.style.left = `${px}px`;
+            pinchCrosshair.style.top = `${py}px`;
+        }
+
+        function navigateDirectional(baseNDC, dirX, dirY) {
+            const photosIdx = [];
+            const photosProj = [];
+            for (let i = 0; i < particles.length; i++) {
+                const p = particles[i];
+                if (!p.isPhoto) continue;
+                const v = p.mesh.position.clone().project(camera);
+                photosIdx.push(i);
+                photosProj.push({ x: v.x, y: v.y });
+            }
+            if (photosIdx.length === 0) return -1;
+            const len = Math.sqrt(dirX*dirX + dirY*dirY) || 1;
+            const ux = dirX / len; const uy = dirY / len;
+            let bestScore = -Infinity; let bestIdx = -1;
+            for (let k = 0; k < photosIdx.length; k++) {
+                const v = photosProj[k];
+                const dx = v.x - baseNDC.x; const dy = v.y - baseNDC.y;
+                const dist = Math.sqrt(dx*dx + dy*dy) + 1e-6;
+                const dot = (dx*ux + dy*uy);
+                if (dot <= 0) continue;
+                const score = dot / dist;
+                if (score > bestScore) { bestScore = score; bestIdx = photosIdx[k]; }
+            }
+            if (bestIdx >= 0) highlightPhoto(bestIdx);
+            return bestIdx;
         }
 
         function animate() {
@@ -674,14 +727,18 @@
                 const pinchX = 1.0 - lm[8].x;
                 const pinchY = lm[8].y;
                 const ndc = { x: pinchX * 2 - 1, y: (1 - pinchY) * 2 - 1 };
+                const px = (ndc.x + 1) * 0.5 * window.innerWidth;
+                const py = (1 - ndc.y) * 0.5 * window.innerHeight;
                 let targetIdx = -1;
                 const photoMeshes = particles.filter(p => p.isPhoto).map(p => p.mesh);
                 if (photoMeshes.length) {
                     raycaster.setFromCamera(ndc, camera);
                     const hits = raycaster.intersectObjects(photoMeshes, false);
+                    let info = '';
                     if (hits.length) {
                         const mesh = hits[0].object;
                         targetIdx = particles.findIndex(p => p.mesh === mesh);
+                        info = `hit idx=${targetIdx}`;
                     } else {
                         let best = Infinity; let idx = -1;
                         for (let i = 0; i < particles.length; i++) {
@@ -691,13 +748,41 @@
                             if (d < best) { best = d; idx = i; }
                         }
                         targetIdx = idx;
+                        info = `nearest idx=${targetIdx}`;
                     }
+                    updateDebug(`${info} pinch=${pinchDist.toFixed(3)}`, px, py);
                 }
                 highlightPhoto(targetIdx);
-                if (pinchDist < 0.05) updateState('ZOOM', targetIdx);
+                if (pinchDist < 0.05) {
+                    if (!zoomLock) {
+                        updateState('ZOOM', targetIdx);
+                        zoomLock = true;
+                    }
+                } else if (currentState === 'ZOOM' && pinchDist >= 0.08) {
+                    zoomLock = false;
+                    clearHighlight();
+                }
             }
-            else if (extended >= 4) { updateState('SCATTER'); targetRotationY = (1.0 - lm[9].x - 0.5) * 5; }
-            else if (extended <= 1) updateState('TREE');
+            else if (extended >= 4) {
+                zoomLock = false; 
+                updateState('SCATTER'); 
+                targetRotationY = (1.0 - lm[9].x - 0.5) * 5;
+                const nx = 1.0 - lm[9].x; const ny = lm[9].y;
+                const ndc = { x: nx * 2 - 1, y: (1 - ny) * 2 - 1 };
+                const now = performance.now();
+                if (lastHandNDC) {
+                    const vx = ndc.x - lastHandNDC.x;
+                    const vy = ndc.y - lastHandNDC.y;
+                    const speed = Math.sqrt(vx*vx + vy*vy);
+                    if (speed > 0.08) {
+                        const base = highlightedIndex !== -1 ? particles[highlightedIndex].mesh.position.clone().project(camera) : ndc;
+                        const idx = navigateDirectional(base, vx, vy);
+                        if (debugEnabled) updateDebug(`dir idx=${idx} speed=${speed.toFixed(3)}`, (ndc.x+1)*0.5*window.innerWidth, (1-ndc.y)*0.5*window.innerHeight);
+                    }
+                }
+                lastHandNDC = ndc; lastHandTime = now;
+            }
+            else if (extended <= 1) { zoomLock = false; updateState('TREE'); }
         }
 
         function dist(p1, p2) {
