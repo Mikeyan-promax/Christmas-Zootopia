@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 Write-Host '[INFO] Generating photos-index.json' -ForegroundColor Cyan
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build-photos-index.ps1 | Out-Null
@@ -18,8 +18,12 @@ git commit -m 'Auto publish site' 2>$null
 
 Write-Host '[INFO] Set main branch and remote' -ForegroundColor Cyan
 git branch -M main
-git remote remove origin 2>$null
-git remote add origin 'https://github.com/Mikeyan-promax/Christmas-Zootopia.git'
+git remote get-url origin 2>$null
+if ($LASTEXITCODE -eq 0) {
+  git remote set-url origin 'https://github.com/Mikeyan-promax/Christmas-Zootopia.git'
+} else {
+  git remote add origin 'https://github.com/Mikeyan-promax/Christmas-Zootopia.git'
+}
 
 Write-Host '[INFO] Push to origin/main' -ForegroundColor Cyan
 git push -u origin main
