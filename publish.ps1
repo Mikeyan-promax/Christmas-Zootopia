@@ -15,6 +15,7 @@ git add -A
 
 Write-Host '[INFO] Commit' -ForegroundColor Cyan
 git commit -m 'Auto publish site' 2>$null
+git commit --allow-empty -m 'Trigger GitHub Pages redeploy' 2>$null
 
 Write-Host '[INFO] Set main branch and remote' -ForegroundColor Cyan
 git branch -M main
